@@ -7,6 +7,33 @@
 	</head>
 	<body>
 		<script src="update.js"></script>
-		<p>hoge</p>
+		<button id="upd">Update</button>
+		<button onclick="add()">Add</button>
+		<button onclick="count=0">Clear</button>
+		<main></main>
+
+		<script>
+			let count = 0;
+			function add() {
+				count++;
+			}
+
+			document.querySelector("main").update = function() {
+				// for (let i = 0; i < count; i++) {
+				// 	const p = this.child("p", i);
+				// 	p.textContent = 'Hello, world!'+i;
+				// }
+				const builder = b(
+					"ul", "list",
+					b("li", 1, "hoge"),
+					b("li", 2, "fuga"),
+				);
+				builder(this);
+			}
+
+			document.getElementById("upd").onclick = function() {
+				update(document.querySelector("main"));
+			}
+		</script>
 	</body>
 </html>

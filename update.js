@@ -1,11 +1,11 @@
 let _t = 0;
-function updateSync(root) {
+function updateSubtreeSync(root) {
 	_t++;
-	root._updateLocal();
+	root._onupdate();
 }
 
-async function update(root) {
-	updateSync(root);
+async function updateSubtree(root) {
+	updateSubtreeSync(root);
 }
 
 Node.prototype._appendChild = Node.prototype.appendChild;
@@ -65,10 +65,8 @@ Element.prototype.replaceWith = function() {
 	this._replaceWith(...arguments);
 }
 
-Element.prototype._updateLocal = function() {
-	if (this._tagCounts == null) { this._tagCounts = new Map(); }
-	this._tagCounts.clear();
-	this.updateLocal();
+Element.prototype._onupdate = function() {
+	this.dispatchEvent(new Event("update"));
 
 	for (let i = this.children.length - 1; i >= 0; i--) {
 		const child = this.children[i];
@@ -82,17 +80,22 @@ Element.prototype._updateLocal = function() {
 	}
 
 	for (const child of this.children) {
-		child._updateLocal();
+		child._onupdate();
 	}
 };
-
-Element.prototype.updateLocal = function() {};
 
 Element.prototype.keyed = function(tagName, key) {
 	tagName = tagName.toLowerCase();
 	if (key == null) {
 		// auto key generation
-		if (this._tagCounts == null) { this._tagCounts = new Map(); } // may be buggy for nested keyed elements
+		if (this._tagCounts == null) {
+			this._tTagCounts = _t;
+			this._tagCounts = new Map();
+		} else if (this._tTagCounts !== _t) {
+			// clear outdated tag counts
+			this._tTagCounts = _t;
+			this._tagCounts.clear();
+		}
 		const tagCount = this._tagCounts.get(tagName) || 0;
 		key = `auto ${tagName} ${tagCount}`;
 		this._tagCounts.set(tagName, tagCount + 1);
@@ -130,12 +133,54 @@ Element.prototype.keyedText = function(text, key) {
 	this.keyed("span", key).textContent = text;
 }
 
+const IS_NON_DIMENSIONAL = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
+
+function setStyle(style, key, value) {
+	if (key[0] === '-') {
+		style.setProperty(key, value == null ? '' : value);
+	} else if (value == null) {
+		style[key] = '';
+	} else if (typeof value != 'number' || IS_NON_DIMENSIONAL.test(key)) {
+		style[key] = value;
+	} else {
+		style[key] = value + 'px';
+	}
+}
+
 function _applyProps(elem, props) {
+	if (props == null) { return; }
+
 	if (elem._listened == null) {
 		elem._listened = new Set();
 	}
 
-	// See https://github.com/preactjs/preact/blob/main/src/diff/index.js#L465
+	for (const key in props) {
+		const value = props[key];
+		if (key === "key") {
+			continue;
+		} else if (key === "style") {
+			const style = elem.style;
+			if (typeof value === "string") {
+				style.cssText = value;
+			} else {
+				for (const key in value) {
+					setStyle(style, key, value[key]);
+				}
+			}
+		} else if (key.startsWith("on")) {
+			const event = key.slice(2).toLowerCase();
+			if (!elem._listened.has(event)) {
+				elem.addEventListener(event, value);
+			}
+			elem._listened.add(event);
+		} else if (key in elem) {
+			elem[key] = value;
+		} else if (value == null) {
+			elem.removeAttribute(key);
+		} else {
+			elem.setAttribute(key, value);
+		}
+	}
 }
 
 function _applyChildren(elem, ...children) {
@@ -145,7 +190,8 @@ function _applyChildren(elem, ...children) {
 		} else if (Array.isArray(child)) {
 			_applyChildren(elem, ...child);
 		} else if (typeof child === "string") {
-			elem.keyedText(child);
+			// elem.keyedText(child);
+			elem.textContent = child;
 		} else if (child != null) {
 			elem.keyedText(child.toString());
 		}
@@ -158,7 +204,7 @@ const React = {
 			return type(props, ...children);
 		}
 		return (parent) => {
-			const elem = parent.keyed(type, props.key);
+			const elem = parent.keyed(type, props ? props.key : null);
 			_applyProps(elem, props);
 			_applyChildren(elem, ...children);
 		};

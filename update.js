@@ -1,7 +1,7 @@
 let _t = 0;
 function updateSync(root) {
 	_t++;
-	root._update();
+	root._updateLocal();
 }
 
 async function update(root) {
@@ -65,8 +65,10 @@ Element.prototype.replaceWith = function() {
 	this._replaceWith(...arguments);
 }
 
-Element.prototype._update = function() {
-	this.update();
+Element.prototype._updateLocal = function() {
+	if (this._tagCounts == null) { this._tagCounts = new Map(); }
+	this._tagCounts.clear();
+	this.updateLocal();
 
 	for (let i = this.children.length - 1; i >= 0; i--) {
 		const child = this.children[i];
@@ -80,14 +82,23 @@ Element.prototype._update = function() {
 	}
 
 	for (const child of this.children) {
-		child._update();
+		child._updateLocal();
 	}
 };
 
-Element.prototype.update = function() {};
+Element.prototype.updateLocal = function() {};
 
-Element.prototype.child = function(tagName, key) {
-	key = String(key);
+Element.prototype.keyed = function(tagName, key) {
+	tagName = tagName.toLowerCase();
+	if (key == null) {
+		// auto key generation
+		if (this._tagCounts == null) { this._tagCounts = new Map(); } // may be buggy for nested keyed elements
+		const tagCount = this._tagCounts.get(tagName) || 0;
+		key = `auto ${tagName} ${tagCount}`;
+		this._tagCounts.set(tagName, tagCount + 1);
+	} else if (typeof key !== "string") {
+		key = key.toString();
+	}
 
 	if (this._keys == null) {
 		this._keys = new Map();
@@ -115,15 +126,41 @@ Element.prototype.child = function(tagName, key) {
 	return child;
 };
 
-function b(tagName, key, ...children) {
-	return (parent) => {
-		const self = parent.child(tagName, key);
-		for (const child of children) {
-			if (typeof child === "function") {
-				child(self);
-			} else {
-				self.textContent = child;
-			}
-		}
-	};
+Element.prototype.keyedText = function(text, key) {
+	this.keyed("span", key).textContent = text;
 }
+
+function _applyProps(elem, props) {
+	if (elem._listened == null) {
+		elem._listened = new Set();
+	}
+
+	// See https://github.com/preactjs/preact/blob/main/src/diff/index.js#L465
+}
+
+function _applyChildren(elem, ...children) {
+	for (const child of children) {
+		if (typeof child === "function") {
+			child(elem);
+		} else if (Array.isArray(child)) {
+			_applyChildren(elem, ...child);
+		} else if (typeof child === "string") {
+			elem.keyedText(child);
+		} else if (child != null) {
+			elem.keyedText(child.toString());
+		}
+	}
+}
+
+const React = {
+	createElement: (type, props, ...children) => {
+		if (typeof type === "function") {
+			return type(props, ...children);
+		}
+		return (parent) => {
+			const elem = parent.keyed(type, props.key);
+			_applyProps(elem, props);
+			_applyChildren(elem, ...children);
+		};
+	},
+};

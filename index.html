@@ -21,17 +21,17 @@
 				count++;
 			}
 
-			document.querySelector("main").update = function() {
+			const h = React.createElement;
+			document.querySelector("main").updateLocal = function() {
 				for (let i = 0; i < count; i++) {
-					const p = this.child("p", i);
-					p.textContent = 'Hello, world!'+i;
+					const p = this.keyed("p");
+					// p.textContent = 'Hello, world!'+i;
+					p.keyedText('Hello, world!'+i);
 				}
-				// const builder = b(
-				// 	"ul", "list",
-				// 	b("li", 1, "hoge"),
-				// 	b("li", 2, "fuga"),
-				// );
-				// builder(this);
+				// h("ul", {key: "ul"},
+				// 	h("li", {key: 1}, "hoge"),
+				// 	h("li", {key: 2}, "fuga"),
+				// )(this);
 			}
 
 			document.getElementById("upd").onclick = function() {

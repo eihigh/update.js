@@ -66,23 +66,34 @@ Element.prototype.replaceWith = function() {
 }
 
 Element.prototype._onupdate = function() {
-	this.dispatchEvent(new Event("update"));
+	// this.dispatchEvent(new Event("update"));
+	this.onupdate();
 
-	for (let i = this.children.length - 1; i >= 0; i--) {
-		const child = this.children[i];
-		if (child.hasAttribute("key") && child._t !== _t) {
-			// remove outdated children
-			if (this._keys != null) {
-				this._keys.delete(child.getAttribute("key"));
+	let child = this.firstElementChild;
+	while (child != null) {
+		if (child._t !== _t) {
+			if (child.hasAttribute("key")) {
+				// remove outdated children
+				if (this._keys != null) {
+					this._keys.delete(child.getAttribute("key"));
+				}
+				const outdated = child;
+				child = child.nextElementSibling;
+				outdated._remove();
+				continue;
 			}
-			this._removeChild(child);
 		}
+		child = child.nextElementSibling;
 	}
 
-	for (const child of this.children) {
+	child = this.firstElementChild;
+	while (child != null) {
 		child._onupdate();
+		child = child.nextElementSibling;
 	}
 };
+
+Element.prototype.onupdate = function() {};
 
 Element.prototype.keyed = function(tagName, key) {
 	tagName = tagName.toLowerCase();
@@ -103,12 +114,25 @@ Element.prototype.keyed = function(tagName, key) {
 		key = key.toString();
 	}
 
+	if (this._tCursor !== _t) {
+		this._tCursor = _t;
+		this._cursor = this.firstElementChild;
+		while (this._cursor != null) {
+			if (this._cursor.hasAttribute("key")) {
+				break;
+			}
+			this._cursor = this._cursor.nextElementSibling;
+		}
+	}
+
 	if (this._keys == null) {
 		this._keys = new Map();
-		for (const child of this.children) {
+		let child = this.firstElementChild;
+		while (child != null) {
 			if (child.hasAttribute("key")) {
 				this._keys.set(child.getAttribute("key"), child);
 			}
+			child = child.nextElementSibling;
 		}
 	}
 
@@ -116,7 +140,18 @@ Element.prototype.keyed = function(tagName, key) {
 		// return existing child
 		const child = this._keys.get(key);
 		child._t = _t;
-		this._appendChild(child);
+		if (this._cursor !== child) {
+			// insert child after cursor
+			const next = this._cursor == null ? null : this._cursor.nextElementSibling;
+			this._insertBefore(child, next);
+		}
+		this._cursor = child.nextElementSibling;
+		while (this._cursor != null) {
+			if (this._cursor.hasAttribute("key")) {
+				break;
+			}
+			this._cursor = this._cursor.nextElementSibling;
+		}
 		return child;
 	}
 
@@ -168,11 +203,15 @@ function _applyProps(elem, props) {
 				}
 			}
 		} else if (key.startsWith("on")) {
-			const event = key.slice(2).toLowerCase();
-			if (!elem._listened.has(event)) {
-				elem.addEventListener(event, value);
+			if (key === "onupdate") {
+				elem.onupdate = value;
+			} else {
+				const event = key.slice(2).toLowerCase();
+				if (!elem._listened.has(event)) {
+					elem.addEventListener(event, value);
+				}
+				elem._listened.add(event);
 			}
-			elem._listened.add(event);
 		} else if (key in elem) {
 			elem[key] = value;
 		} else if (value == null) {
@@ -206,7 +245,12 @@ const React = {
 		return (parent) => {
 			const elem = parent.keyed(type, props ? props.key : null);
 			_applyProps(elem, props);
-			_applyChildren(elem, ...children);
+			if (children.length === 1 && typeof children[0] === "string") {
+				// fast path for text-only children
+				elem.textContent = children[0];
+			} else {
+				_applyChildren(elem, ...children);
+			}
 		};
 	},
 };

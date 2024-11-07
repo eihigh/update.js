@@ -1,13 +1,3 @@
-let _t = 0;
-function updateSubtreeSync(root) {
-	_t++;
-	root._onupdate();
-}
-
-async function updateSubtree(root) {
-	updateSubtreeSync(root);
-}
-
 Node.prototype._appendChild = Node.prototype.appendChild;
 Node.prototype.appendChild = function() {
 	delete this._keys;
@@ -65,66 +55,101 @@ Element.prototype.replaceWith = function() {
 	this._replaceWith(...arguments);
 }
 
-Element.prototype._onupdate = function() {
-	// this.dispatchEvent(new Event("update"));
-	this.onupdate();
+let _t = 1;
+let _willCleanup = false;
+const _depths = new Map();
 
-	let child = this.firstElementChild;
-	while (child != null) {
-		if (child._t !== _t) {
-			if (child.hasAttribute("key")) {
-				// remove outdated children
-				if (this._keys != null) {
-					this._keys.delete(child.getAttribute("key"));
-				}
-				const outdated = child;
-				child = child.nextElementSibling;
-				outdated._remove();
+async function _cleanup() {
+	// collect elements with the minimum depth
+	let minDepth = Infinity;
+	let minDepthElems = [];
+	for (const elem of _depths.keys()) {
+		const depth = _depths.get(elem);
+		if (depth < minDepth) {
+			minDepth = depth;
+			minDepthElems = [elem];
+		} else if (depth === minDepth) {
+			minDepthElems.push(elem);
+		}
+	}
+	// cleanup elements recursively
+	for (const elem of minDepthElems) {
+		_cleanupElem(elem);
+	}
+	_willCleanup = false;
+	_depths.clear();
+	_t++;
+}
+
+function _cleanupElem(elem) {
+	if (elem._tHasDynamicChildren === _t) {
+		// remove elements and text nodes
+		let child = elem.firstChild;
+		while (child != null) {
+			if (child._t === _t) {
+				// keep new child
+				child = child.nextSibling;
 				continue;
 			}
+			if (child.nodeType === Node.ELEMENT_NODE && !child.hasAttribute("key")) {
+				// keep unkeyed element
+				child = child.nextSibling;
+				continue;
+			}
+			// remove outdated child
+			const outdated = child;
+			child = child.nextSibling;
+			elem._removeChild(outdated);
 		}
-		child = child.nextElementSibling;
+	} else {
+		// remove elements
+		let child = elem.firstElementChild;
+		while (child != null) {
+			if (child._t === _t) {
+				// keep new child
+				child = child.nextElementSibling;
+				continue;
+			}
+			if (!child.hasAttribute("key")) {
+				// keep unkeyed element
+				child = child.nextElementSibling;
+				continue;
+			}
+			// remove outdated child
+			const outdated = child;
+			child = child.nextElementSibling;
+			elem._removeChild(outdated);
+		}
 	}
 
-	child = this.firstElementChild;
+	let child = elem.firstElementChild;
 	while (child != null) {
-		child._onupdate();
+		_cleanupElem(child); // recursive
 		child = child.nextElementSibling;
 	}
-};
-
-Element.prototype.onupdate = function() {};
+}
 
 Element.prototype.keyed = function(tagName, key) {
-	tagName = tagName.toLowerCase();
-	if (key == null) {
-		// auto key generation
-		if (this._tagCounts == null) {
-			this._tTagCounts = _t;
-			this._tagCounts = new Map();
-		} else if (this._tTagCounts !== _t) {
-			// clear outdated tag counts
-			this._tTagCounts = _t;
-			this._tagCounts.clear();
-		}
-		const tagCount = this._tagCounts.get(tagName) || 0;
-		key = `auto ${tagName} ${tagCount}`;
-		this._tagCounts.set(tagName, tagCount + 1);
-	} else if (typeof key !== "string") {
-		key = key.toString();
+	this._tHasDynamicChildren = _t;
+
+	// request cleanup
+	if (!_willCleanup) {
+		_willCleanup = true;
+		queueMicrotask(_cleanup);
 	}
 
-	if (this._tCursor !== _t) {
-		this._tCursor = _t;
-		this._cursor = this.firstElementChild;
-		while (this._cursor != null) {
-			if (this._cursor.hasAttribute("key")) {
-				break;
-			}
-			this._cursor = this._cursor.nextElementSibling;
+	// cache the depth of this element
+	if (!_depths.has(this)) {
+		let depth = 0;
+		let parent = this.parentElement;
+		while (parent != null) {
+			depth++;
+			parent = parent.parentElement;
 		}
+		_depths.set(this, depth);
 	}
 
+	// collect keys of server-rendered children
 	if (this._keys == null) {
 		this._keys = new Map();
 		let child = this.firstElementChild;
@@ -136,22 +161,52 @@ Element.prototype.keyed = function(tagName, key) {
 		}
 	}
 
+	// auto key generation
+	if (key == null) {
+		// initialize or clear tag counts
+		if (this._tagCounts == null) {
+			this._tTagCounts = _t;
+			this._tagCounts = new Map();
+		} else if (this._tTagCounts !== _t) {
+			this._tTagCounts = _t;
+			this._tagCounts.clear();
+		}
+		// generate key
+		const tagCount = this._tagCounts.get(tagName) || 0;
+		key = `auto ${tagName} ${tagCount}`;
+		this._tagCounts.set(tagName, tagCount + 1);
+	} else if (typeof key !== "string") {
+		key = key.toString();
+	}
+
+	// initialize cursor
+	if (this._tCursor !== _t) {
+		this._tCursor = _t;
+		this._cursor = this.firstElementChild;
+	}
+
+	// return existing child
 	if (this._keys.has(key)) {
-		// return existing child
 		const child = this._keys.get(key);
 		child._t = _t;
-		if (this._cursor !== child) {
-			// insert child after cursor
-			const next = this._cursor == null ? null : this._cursor.nextElementSibling;
-			this._insertBefore(child, next);
-		}
-		this._cursor = child.nextElementSibling;
+
+		// skip to the next keyed element
 		while (this._cursor != null) {
-			if (this._cursor.hasAttribute("key")) {
+			if (this._cursor.nodeType === Node.ELEMENT_NODE && this._cursor.hasAttribute("key")) {
 				break;
 			}
 			this._cursor = this._cursor.nextElementSibling;
 		}
+
+		// insert child after the cursor
+		if (this._cursor !== child) {
+			const next = this._cursor == null ? null : this._cursor.nextSibling;
+			this._insertBefore(child, next);
+		}
+
+		// move the cursor to the next of the child
+		this._cursor = child.nextSibling;
+
 		return child;
 	}
 
@@ -159,13 +214,42 @@ Element.prototype.keyed = function(tagName, key) {
 	const child = document.createElement(tagName);
 	child._t = _t;
 	child.setAttribute("key", key);
-	this._appendChild(child);
 	this._keys.set(key, child);
+
+	// insert child after the cursor
+	const next = this._cursor == null ? null : this._cursor.nextSibling;
+	this._insertBefore(child, next);
+
+	// move the cursor to the next of the child
+	if (next != null) {
+		this._cursor = child.nextSibling;
+	}
+
 	return child;
 };
 
-Element.prototype.keyedText = function(text, key) {
-	this.keyed("span", key).textContent = text;
+Element.prototype.insertText = function(text) {
+	this._tHasDynamicChildren = _t;
+
+	if (this._cursor.nodeType === Node.TEXT_NODE && this._cursor._t == null) {
+		this._cursor.textContent = text;
+		this._cursor._t = _t;
+		this._cursor = this._cursor.nextSibling;
+		return;
+	}
+
+	// create new child
+	const node = document.createTextNode(text);
+	node._t = _t;
+
+	// insert child after the cursor
+	const next = this._cursor == null ? null : this._cursor.nextSibling;
+	this._insertBefore(node, next);
+
+	// move the cursor to the next of the child
+	if (next != null) {
+		this._cursor = node.nextSibling;
+	}
 }
 
 const IS_NON_DIMENSIONAL = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
@@ -203,15 +287,11 @@ function _applyProps(elem, props) {
 				}
 			}
 		} else if (key.startsWith("on")) {
-			if (key === "onupdate") {
-				elem.onupdate = value;
-			} else {
-				const event = key.slice(2).toLowerCase();
-				if (!elem._listened.has(event)) {
-					elem.addEventListener(event, value);
-				}
-				elem._listened.add(event);
+			const event = key.slice(2).toLowerCase();
+			if (!elem._listened.has(event)) {
+				elem.addEventListener(event, value);
 			}
+			elem._listened.add(event);
 		} else if (key in elem) {
 			elem[key] = value;
 		} else if (value == null) {
@@ -240,12 +320,12 @@ function _applyChildren(elem, ...children) {
 const React = {
 	createElement: (type, props, ...children) => {
 		if (typeof type === "function") {
-			return type(props, ...children);
+			return (parent) => type(parent, props, ...children);
 		}
 		return (parent) => {
 			const elem = parent.keyed(type, props ? props.key : null);
 			_applyProps(elem, props);
-			if (children.length === 1 && typeof children[0] === "string") {
+			if (children.length === 0) {
 				// fast path for text-only children
 				elem.textContent = children[0];
 			} else {
